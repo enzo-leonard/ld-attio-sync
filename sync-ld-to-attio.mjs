@@ -445,9 +445,12 @@ async function waitForLdRateBudget() {
     let wait = msLeft + 75;
     if (wait <= 0 || wait > 60_000) wait = 10_000;
     wait += Math.floor(Math.random() * 200);
-    console.warn(
-      `LD budget empty (${ldRateLimitLabel()}) — waiting ${wait}ms until reset`,
-    );
+    // Throttle spam: only log waits >= 2s
+    if (wait >= 2000) {
+      console.warn(
+        `LD budget empty (${ldRateLimitLabel()}) — waiting ${wait}ms until reset`,
+      );
+    }
     await sleep(wait);
     ldRateLimit.routeRemaining = null;
     ldRateLimit.globalRemaining = null;
@@ -890,57 +893,104 @@ async function upsertAttio(email, featureFlags, configFlags) {
   );
 }
 
+function logLine(...args) {
+  // Force flush so GitHub Actions live logs don't appear "stuck"
+  console.log(...args);
+  if (typeof process.stdout?.write === "function") {
+    try {
+      process.stdout.write("");
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+async function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms,
+    );
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function main() {
-  console.log("=== LD → Attio sync ===");
-  console.log(
+  logLine("=== LD → Attio sync ===");
+  logLine(
     `LIMIT=${LIMIT ?? "all"} DRY_RUN=${DRY_RUN} DELAY_MS=${DELAY_MS} CONCURRENCY=${CONCURRENCY}`,
   );
-  console.log(`Features slug: ${ATTIO_FLAGS_SLUG}`);
-  console.log(`Config slug:   ${ATTIO_CONFIG_SLUG}`);
+  logLine(`Features slug: ${ATTIO_FLAGS_SLUG}`);
+  logLine(`Config slug:   ${ATTIO_CONFIG_SLUG}`);
 
   if (!DRY_RUN) {
     await bootstrapAttioOptions();
   }
 
   const emails = await getEmails(LIMIT);
-  console.log(`Emails to process: ${emails.length}`);
+  logLine(`Emails to process: ${emails.length}`);
 
   const userCache = await getUserCache(emails);
 
   let ok = 0;
   let fail = 0;
   let done = 0;
+  let inFlight = 0;
+  const startedAt = Date.now();
   const samples = [];
   let nextIndex = 0;
+  const EMAIL_TIMEOUT_MS = Number(process.env.EMAIL_TIMEOUT_MS || 180_000);
+
+  const heartbeat = setInterval(() => {
+    const mins = ((Date.now() - startedAt) / 60000).toFixed(1);
+    logLine(
+      `  heartbeat t=${mins}m done=${done}/${emails.length} ok=${ok} fail=${fail} inFlight=${inFlight} ${ldRateLimitLabel()}`,
+    );
+  }, 60_000);
+  if (typeof heartbeat.unref === "function") heartbeat.unref();
 
   async function processOne(i) {
     const email = emails[i];
+    inFlight += 1;
     try {
-      const items = await evaluateFlags(email, userCache.get(email));
-      const { featureFlags, configFlags } = extractFlags(items);
+      await withTimeout(
+        (async () => {
+          const items = await evaluateFlags(email, userCache.get(email));
+          const { featureFlags, configFlags } = extractFlags(items);
 
-      if (samples.length < 5) {
-        samples.push({
-          email,
-          featureFlags,
-          configFlags,
-          mode: userCache.has(email) ? "multi" : "email",
-        });
-      }
+          if (samples.length < 5) {
+            samples.push({
+              email,
+              featureFlags,
+              configFlags,
+              mode: userCache.has(email) ? "multi" : "email",
+            });
+          }
 
-      if (!DRY_RUN) {
-        await upsertAttio(email, featureFlags, configFlags);
-      }
+          if (!DRY_RUN) {
+            await upsertAttio(email, featureFlags, configFlags);
+          }
+        })(),
+        EMAIL_TIMEOUT_MS,
+        `email #${i + 1}`,
+      );
 
       ok += 1;
     } catch (err) {
       fail += 1;
       console.error(`  FAIL #${i + 1}: ${err.message}`);
+    } finally {
+      inFlight -= 1;
     }
 
     done += 1;
     if (done % 10 === 0 || done === emails.length) {
-      console.log(
+      logLine(
         `  [${done}/${emails.length}] ok=${ok} fail=${fail} ${ldRateLimitLabel()}`,
       );
       printApiStats(`@${done}`);
@@ -957,11 +1007,15 @@ async function main() {
     }
   }
 
-  await Promise.all(
-    Array.from({ length: Math.min(CONCURRENCY, emails.length) }, () =>
-      worker(),
-    ),
-  );
+  try {
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, emails.length) }, () =>
+        worker(),
+      ),
+    );
+  } finally {
+    clearInterval(heartbeat);
+  }
 
   console.log("\n=== Sample results ===");
   for (let sIdx = 0; sIdx < samples.length; sIdx++) {
