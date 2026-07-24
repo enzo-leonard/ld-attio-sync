@@ -37,4 +37,8 @@ jobs:
           LIMIT: ${{ github.event.inputs.limit }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           DELAY_MS: "350"
+          CONCURRENCY: "1"
+          # Fail a single email after 3 min so one hung HTTP call can't freeze the job
+          EMAIL_TIMEOUT_MS: "180000"
+          NODE_OPTIONS: "--no-warnings"
         run: node sync-ld-to-attio.mjs
