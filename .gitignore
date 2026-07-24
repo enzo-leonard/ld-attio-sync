@@ -1,0 +1,11 @@
+.env
+.env.*
+.cache/
+node_modules/
+.DS_Store
+
+# Local data / PII — never commit
+org-domains.json
+*.csv
+*.log
+export.log

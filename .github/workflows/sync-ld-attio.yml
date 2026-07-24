@@ -1,0 +1,37 @@
+name: Sync LD flags → Attio
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Max emails to sync (empty = all)"
+        required: false
+        default: "100"
+      dry_run:
+        description: "Dry run (1 = no Attio writes)"
+        required: false
+        default: "0"
+  schedule:
+    # Daily at 06:00 UTC — full sync (remove limit in env below when ready)
+    - cron: "0 6 * * *"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run sync
+        env:
+          LAUNCHDARKLY_API_KEY: ${{ secrets.LAUNCHDARKLY_API_KEY }}
+          ATTIO_API_TOKEN: ${{ secrets.ATTIO_API_TOKEN }}
+          ATTIO_LD_FLAGS_SLUG: ld_flags
+          LIMIT: ${{ github.event.inputs.limit }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          DELAY_MS: "350"
+        run: node sync-ld-to-attio.mjs
