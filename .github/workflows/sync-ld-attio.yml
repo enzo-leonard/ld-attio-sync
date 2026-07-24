@@ -28,7 +28,9 @@ jobs:
 
       - name: Run sync
         env:
-          LAUNCHDARKLY_API_KEY: ${{ secrets.LAUNCHDARKLY_API_KEY }}
+          # Prefer LAUNCHDARKLY_API_KEY; fall back to LAUCH_DARK_API (typo kept from local .env)
+          LAUNCHDARKLY_API_KEY: ${{ secrets.LAUNCHDARKLY_API_KEY || secrets.LAUCH_DARK_API }}
+          LAUCH_DARK_API: ${{ secrets.LAUCH_DARK_API || secrets.LAUNCHDARKLY_API_KEY }}
           ATTIO_API_TOKEN: ${{ secrets.ATTIO_API_TOKEN }}
           ATTIO_LD_FLAGS_SLUG: ld_flags
           LIMIT: ${{ github.event.inputs.limit }}
