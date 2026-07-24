@@ -1,0 +1,11 @@
+{
+  "name": "ld-attio-sync",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync": "node sync-ld-to-attio.mjs",
+    "sync:100": "LIMIT=100 DRY_RUN=0 node sync-ld-to-attio.mjs",
+    "sync:dry": "LIMIT=100 DRY_RUN=1 node sync-ld-to-attio.mjs"
+  }
+}
