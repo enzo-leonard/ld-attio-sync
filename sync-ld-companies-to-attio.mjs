@@ -45,6 +45,8 @@ const ATTIO_TOKEN = process.env.ATTIO_API_TOKEN || "";
 const ATTIO_FLAGS_SLUG = process.env.ATTIO_LD_FLAGS_SLUG || "ld_flags";
 const ATTIO_CONFIG_SLUG =
   process.env.ATTIO_LD_CONFIG_FLAGS_SLUG || "ld_config_flags";
+const ATTIO_LAST_UPDATED_SLUG =
+  process.env.ATTIO_LD_LAST_UPDATED_SLUG || "ld_last_updated";
 const PROJECT = process.env.LD_PROJECT_KEY || "default";
 const ENV = process.env.LD_ENVIRONMENT_KEY || "production";
 const LIMIT = process.env.LIMIT ? Number(process.env.LIMIT) : null;
@@ -254,6 +256,10 @@ async function bootstrapOptions() {
   await createMissingOptions(ATTIO_FLAGS_SLUG, [...FLAG_KEYS]);
 }
 
+function todayUtcDate() {
+  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD for Attio date attrs
+}
+
 async function upsertCompany(org, featureFlags, configFlags) {
   await createMissingOptions(ATTIO_FLAGS_SLUG, featureFlags);
   await createMissingOptions(ATTIO_CONFIG_SLUG, configFlags);
@@ -262,6 +268,7 @@ async function upsertCompany(org, featureFlags, configFlags) {
     domains: [org.domain],
     [ATTIO_FLAGS_SLUG]: featureFlags,
     [ATTIO_CONFIG_SLUG]: configFlags,
+    [ATTIO_LAST_UPDATED_SLUG]: todayUtcDate(),
   };
   if (org.name) {
     values.name = org.name;
