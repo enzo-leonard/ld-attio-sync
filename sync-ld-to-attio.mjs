@@ -15,6 +15,7 @@
  *   ATTIO_LD_FLAGS_SLUG         (default: ld_flags)
  *   ATTIO_LD_CONFIG_FLAGS_SLUG  (default: ld_config_flags)
  *   LIMIT, DRY_RUN, DELAY_MS, CONCURRENCY, VERBOSE_API
+ *   SHARD_INDEX / SHARD_COUNT (e.g. 0/2 and 1/2 — no overlap)
  *   CACHE_TTL_HOURS (default 24), REFRESH_CACHE=1 to force re-list
  *   LD_RATE_CUSHION (default 0) — hard-wait only when remaining ≤ cushion
  */
@@ -50,6 +51,15 @@ const PROJECT = process.env.LD_PROJECT_KEY || "default";
 const ENV = process.env.LD_ENVIRONMENT_KEY || "production";
 const LIMIT = process.env.LIMIT ? Number(process.env.LIMIT) : null;
 const DRY_RUN = process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true";
+/**
+ * Split the email list across jobs (no overlap).
+ * SHARD_COUNT=2 SHARD_INDEX=0 → first half; SHARD_INDEX=1 → second half.
+ */
+const SHARD_COUNT = Math.max(1, Number(process.env.SHARD_COUNT || 1));
+const SHARD_INDEX = Math.min(
+  SHARD_COUNT - 1,
+  Math.max(0, Number(process.env.SHARD_INDEX ?? 0)),
+);
 /** Pause after each email (per worker). Rate-limit pacing is mostly header-driven. */
 const DELAY_MS = Number(process.env.DELAY_MS || 100);
 /** Parallel emails. 2 is a good default; use 1 if LD 429s explode. */
@@ -905,6 +915,15 @@ function logLine(...args) {
   }
 }
 
+/** Contiguous slice so shards never overlap (0 = first half, 1 = second, …). */
+function takeShard(items, shardIndex, shardCount) {
+  if (shardCount <= 1) return items;
+  const n = items.length;
+  const start = Math.floor((n * shardIndex) / shardCount);
+  const end = Math.floor((n * (shardIndex + 1)) / shardCount);
+  return items.slice(start, end);
+}
+
 async function withTimeout(promise, ms, label) {
   let timer;
   const timeout = new Promise((_, reject) => {
@@ -923,7 +942,7 @@ async function withTimeout(promise, ms, label) {
 async function main() {
   logLine("=== LD → Attio sync ===");
   logLine(
-    `LIMIT=${LIMIT ?? "all"} DRY_RUN=${DRY_RUN} DELAY_MS=${DELAY_MS} CONCURRENCY=${CONCURRENCY}`,
+    `LIMIT=${LIMIT ?? "all"} DRY_RUN=${DRY_RUN} DELAY_MS=${DELAY_MS} CONCURRENCY=${CONCURRENCY} SHARD=${SHARD_INDEX}/${SHARD_COUNT}`,
   );
   logLine(`Features slug: ${ATTIO_FLAGS_SLUG}`);
   logLine(`Config slug:   ${ATTIO_CONFIG_SLUG}`);
@@ -932,8 +951,11 @@ async function main() {
     await bootstrapAttioOptions();
   }
 
-  const emails = await getEmails(LIMIT);
-  logLine(`Emails to process: ${emails.length}`);
+  const allEmails = await getEmails(LIMIT);
+  const emails = takeShard(allEmails, SHARD_INDEX, SHARD_COUNT);
+  logLine(
+    `Emails: ${allEmails.length} total → shard ${SHARD_INDEX}/${SHARD_COUNT} = ${emails.length} to process`,
+  );
 
   const userCache = await getUserCache(emails);
 
