@@ -4,17 +4,26 @@ on:
   workflow_dispatch:
     inputs:
       limit:
-        description: "Max emails to sync (empty = all)"
+        description: "Max emails to sync before sharding (empty = all)"
         required: false
-        default: "100"
+        default: ""
       dry_run:
         description: "Dry run (1 = no Attio writes)"
         required: false
         default: "0"
+      shard_index:
+        description: "Which half (0 = first, 1 = second)"
+        required: false
+        default: "0"
+      shard_count:
+        description: "Number of shards"
+        required: false
+        default: "2"
   schedule:
-    # Every night 01:00 Europe/Paris (CEST = UTC+2 → 23:00 UTC)
-    # In winter (CET = UTC+1) this fires at 00:00 Paris — adjust if needed.
+    # Shard 0 — 01:00 Europe/Paris (CEST → 23:00 UTC)
     - cron: "0 23 * * *"
+    # Shard 1 — 07:00 Europe/Paris (CEST → 05:00 UTC), 6h later
+    - cron: "0 5 * * *"
 
 jobs:
   sync:
@@ -27,6 +36,20 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Resolve shard
+        id: shard
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "index=${{ github.event.inputs.shard_index }}" >> "$GITHUB_OUTPUT"
+            echo "count=${{ github.event.inputs.shard_count }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0 5 * * *" ]; then
+            echo "index=1" >> "$GITHUB_OUTPUT"
+            echo "count=2" >> "$GITHUB_OUTPUT"
+          else
+            echo "index=0" >> "$GITHUB_OUTPUT"
+            echo "count=2" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run sync
         env:
           # Prefer LAUNCHDARKLY_API_KEY; fall back to LAUCH_DARK_API (typo kept from local .env)
@@ -38,7 +61,10 @@ jobs:
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           DELAY_MS: "350"
           CONCURRENCY: "1"
-          # Fail a single email after 3 min so one hung HTTP call can't freeze the job
+          SHARD_INDEX: ${{ steps.shard.outputs.index }}
+          SHARD_COUNT: ${{ steps.shard.outputs.count }}
           EMAIL_TIMEOUT_MS: "180000"
           NODE_OPTIONS: "--no-warnings"
-        run: node sync-ld-to-attio.mjs
+        run: |
+          echo "Running shard $SHARD_INDEX / $SHARD_COUNT"
+          node sync-ld-to-attio.mjs
