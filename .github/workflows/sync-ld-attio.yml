@@ -20,10 +20,12 @@ on:
         required: false
         default: "2"
   schedule:
-    # Shard 0 — 01:00 Europe/Paris (CEST → 23:00 UTC)
-    - cron: "0 23 * * *"
-    # Shard 1 — 07:00 Europe/Paris (CEST → 05:00 UTC), 6h later
-    - cron: "0 5 * * *"
+    # Weekly Fridays — shard 0 at 01:00 Europe/Paris
+    # CEST (UTC+2): Friday 01:00 Paris = Thursday 23:00 UTC
+    - cron: "0 23 * * 4"
+    # Weekly Fridays — shard 1 at 07:00 Europe/Paris (6h later)
+    # CEST (UTC+2): Friday 07:00 Paris = Friday 05:00 UTC
+    - cron: "0 5 * * 5"
 
 jobs:
   sync:
@@ -42,7 +44,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "index=${{ github.event.inputs.shard_index }}" >> "$GITHUB_OUTPUT"
             echo "count=${{ github.event.inputs.shard_count }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.schedule }}" = "0 5 * * *" ]; then
+          elif [ "${{ github.event.schedule }}" = "0 5 * * 5" ]; then
             echo "index=1" >> "$GITHUB_OUTPUT"
             echo "count=2" >> "$GITHUB_OUTPUT"
           else
