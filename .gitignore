@@ -9,3 +9,6 @@ org-domains.json
 *.csv
 *.log
 export.log
+
+# local CIO auth helper
+.cio-auth-header.txt

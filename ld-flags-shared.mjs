@@ -134,6 +134,136 @@ export const CONFIG_FLAG_KEYS = new Set([
   "feature-flags-opt-in",
 ]);
 
+/**
+ * 3 CIO-friendly buckets (each full CSV stays under Customer.io's 1000B limit).
+ *   ld_flags_calls   — recording / calendar / live call
+ *   ld_flags_ai      — Juni / JGPT / KTA / IVG / summaries
+ *   ld_flags_product — library / slides / surveys / UX / sharing
+ */
+export const FLAG_CATEGORIES = {
+  calls: new Set([
+    "enable-recording-bot",
+    "enable-in-browser-recording",
+    "enable-use-display-media",
+    "enable-calendar-integration",
+    "enable-auto-record-calendar-events",
+    "show-new-scheduled-calls",
+    "custom-bot-name",
+    "browser-recording-start-confirmation",
+    "live_transcription",
+    "live-transcription-recall",
+    "in-call-live-summary",
+    "post-call-streaming-summary",
+    "live-call-classification",
+    "enable-calls-v2",
+    "enable-all-calls",
+    "enabled-standalone-calls",
+    "enable-call-price-tracker",
+    "mobile-standalone-calls",
+    "mobile-share-recording",
+    "desktop-app-trim-calls",
+    "enable-import-calls-from-advisors-button",
+    "recording-confirmation-config",
+    "enable-restricted-meeting-guardrail",
+    "enable-take-notes",
+    "enable-duplicate-interview",
+  ]),
+  ai: new Set([
+    "enable-agentic-jgpt-v3",
+    "juni-global-chatbot",
+    "enable-personal-jgpt-chat",
+    "enable-document-sources-jgpt",
+    "enable-inline-citations",
+    "enable-quote-tool",
+    "enable-dynamic-juni-suggestions",
+    "enable-nl-interview-filters",
+    "enable-mcp",
+    "ivg-generation",
+    "ivg-search-library",
+    "enable-interview-guide-markdown-editor",
+    "agentic-loop-chat-v2",
+    "enable-interview-guide-auto-checkoff",
+    "enable-tracker",
+    "enable-kta-chat",
+    "enable-kta-agentic-chat",
+    "enable-kta-generation-v2",
+    "running-summaries",
+    "enable-running-summary-templates",
+    "enable-running-summary-citation",
+    "summary-by-date-range",
+    "enable-entity-benchmarking",
+    "render-similar-entities",
+    "competitive-analysis-generation",
+    "enable-sentiment-analysis",
+    "desktop-app-jgpt",
+    "desktop-app-ivg-juni-chatbot",
+    "junior-interviewer-v1-client-test",
+    "voice-agents-mode",
+    // moved from product to keep JSON array ≤ 1000B
+    "enable-transcript-library-market-reports",
+    "mobile-app-notification-announcement",
+  ]),
+  product: new Set([
+    "thematic_transcripts",
+    "enable-transcript-library",
+    "enable-transcript-library-filters",
+    "enable-report-generator",
+    "enable-slide-deck",
+    "enable-slide-builder",
+    "enable-ppt-audit",
+    "enable-ppt-audit-style-guide",
+    "enable-thinkcell-service",
+    "enable-foreign-transcript",
+    "enable-original-language-transcript",
+    "transcript_anonymization",
+    "enable_anonymization_settings",
+    "enable-survey-module",
+    "enable-survey-builder-uxr",
+    "enable-survey-painted-door",
+    "enable-desktop-app-download",
+    "mobile-app-banner",
+    "enable-home-v2",
+    "new-project-onboarding",
+    "learn-junior",
+    "force-learn-junior",
+    "welcome-modal",
+    "book-a-demo-links",
+    "show-feature-announcements",
+    "feature-flags-opt-in",
+    "enable-junior-wrapped",
+    "cmd-k-menu-v2",
+    "enable-bookmarks-folders-v2",
+    "highlight-v2",
+    "highlighting-quotes",
+    "show-project-costs",
+    "project_sharing",
+    "project_share_linking",
+    "enable-org-wide-project-visibility",
+    "share-auto-provision-domains",
+    "enable-bulk-upload-modal",
+    "enable-enhanced-docx-parsing",
+  ]),
+};
+
+/** Map a flag key → category slug (`calls` | `ai` | `product`). */
+export function categoryForFlag(key) {
+  if (FLAG_CATEGORIES.calls.has(key)) return "calls";
+  if (FLAG_CATEGORIES.ai.has(key)) return "ai";
+  if (FLAG_CATEGORIES.product.has(key)) return "product";
+  // *-notification-announcement and anything unknown → product
+  return "product";
+}
+
+/** Split ON flag titles into the 3 category lists (sorted). */
+export function splitFlagsByCategory(flagTitles) {
+  const out = { calls: [], ai: [], product: [] };
+  for (const key of flagTitles || []) {
+    out[categoryForFlag(key)].push(key);
+  }
+  for (const k of Object.keys(out)) out[k].sort();
+  return out;
+}
+
 /** LD org name → Attio company domain (loaded from gitignored org-domains.json). */
 export const ORG_NAME_TO_DOMAIN = loadOrgNameToDomain();
 

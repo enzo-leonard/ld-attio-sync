@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 /**
- * Sync LaunchDarkly flags → Attio people
+ * Sync LaunchDarkly flags → Attio people, then the same flag fields → Customer.io.
  *   - ld_flags         : boolean features ON
  *   - ld_config_flags  : config values as "key=value"
+ * CIO gets the same flags split like sync-attio-to-cio.mjs:
+ *   ld_flags_calls, ld_flags_ai, ld_flags_product, ld_config_flags, ld_last_updated
+ * Other CIO attributes are left untouched (identify merges).
  *
  * Usage:
  *   LIMIT=100 DRY_RUN=1 node sync-ld-to-attio.mjs
@@ -12,6 +15,8 @@
  * Env:
  *   LAUCH_DARK_API / LAUNCHDARKLY_API_KEY
  *   ATTIO_API_TOKEN
+ *   CUSTOMERIO_SITE_ID / CUSTOMERIO_API_KEY / CUSTOMERIO_REGION (us|eu)
+ *   SYNC_CIO=0 to skip Customer.io
  *   ATTIO_LD_FLAGS_SLUG         (default: ld_flags)
  *   ATTIO_LD_CONFIG_FLAGS_SLUG  (default: ld_config_flags)
  *   LIMIT, DRY_RUN, DELAY_MS, CONCURRENCY, VERBOSE_API
@@ -23,6 +28,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { splitFlagsByCategory } from "./ld-flags-shared.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -47,6 +53,15 @@ const ATTIO_CONFIG_SLUG =
   process.env.ATTIO_LD_CONFIG_FLAGS_SLUG || "ld_config_flags";
 const ATTIO_LAST_UPDATED_SLUG =
   process.env.ATTIO_LD_LAST_UPDATED_SLUG || "ld_last_updated";
+const CIO_SITE_ID = process.env.CUSTOMERIO_SITE_ID || "";
+const CIO_API_KEY = process.env.CUSTOMERIO_API_KEY || "";
+const CIO_REGION = (process.env.CUSTOMERIO_REGION || "us").toLowerCase();
+const SYNC_CIO = process.env.SYNC_CIO !== "0" && process.env.SYNC_CIO !== "false";
+const CIO_TRACK_BASE =
+  CIO_REGION === "eu"
+    ? "https://track-eu.customer.io"
+    : "https://track.customer.io";
+const CIO_ATTR_MAX_BYTES = Number(process.env.CIO_ATTR_MAX_BYTES || 1000);
 const PROJECT = process.env.LD_PROJECT_KEY || "default";
 const ENV = process.env.LD_ENVIRONMENT_KEY || "production";
 const LIMIT = process.env.LIMIT ? Number(process.env.LIMIT) : null;
@@ -887,20 +902,64 @@ async function upsertAttio(email, featureFlags, configFlags) {
   await createMissingOptions(ATTIO_FLAGS_SLUG, featureFlags);
   await createMissingOptions(ATTIO_CONFIG_SLUG, configFlags);
 
+  const updatedOn = todayUtcDate();
   const values = {
     email_addresses: [{ email_address: email }],
     [ATTIO_FLAGS_SLUG]: featureFlags,
     [ATTIO_CONFIG_SLUG]: configFlags,
-    [ATTIO_LAST_UPDATED_SLUG]: todayUtcDate(),
+    [ATTIO_LAST_UPDATED_SLUG]: updatedOn,
   };
 
-  return attioFetch(
+  await attioFetch(
     `https://api.attio.com/v2/objects/people/records?matching_attribute=email_addresses`,
     {
       method: "PUT",
       body: JSON.stringify({ data: { values } }),
     },
   );
+
+  if (SYNC_CIO) await identifyCioFlags(email, featureFlags, configFlags, updatedOn);
+}
+
+function cioFlagArray(name, titles) {
+  const arr = [...(titles || [])];
+  const bytes = Buffer.byteLength(JSON.stringify(arr), "utf8");
+  if (bytes > CIO_ATTR_MAX_BYTES) {
+    throw new Error(
+      `${name} exceeds ${CIO_ATTR_MAX_BYTES}B (${bytes}B, ${arr.length} items)`,
+    );
+  }
+  return arr;
+}
+
+/** Same split as sync-attio-to-cio.mjs. Identify merges, so only flag fields change. */
+async function identifyCioFlags(email, featureFlags, configFlags, updatedOn) {
+  if (!CIO_SITE_ID || !CIO_API_KEY) {
+    throw new Error("SYNC_CIO is on but CUSTOMERIO_SITE_ID / CUSTOMERIO_API_KEY is missing");
+  }
+  const byCat = splitFlagsByCategory(featureFlags);
+  const attributes = {
+    email,
+    ld_flags_calls: cioFlagArray("ld_flags_calls", byCat.calls),
+    ld_flags_ai: cioFlagArray("ld_flags_ai", byCat.ai),
+    ld_flags_product: cioFlagArray("ld_flags_product", byCat.product),
+    ld_config_flags: cioFlagArray("ld_config_flags", [...configFlags].sort()),
+    ld_last_updated: updatedOn,
+  };
+  const auth = Buffer.from(`${CIO_SITE_ID}:${CIO_API_KEY}`).toString("base64");
+  const url = `${CIO_TRACK_BASE}/api/v1/customers/${encodeURIComponent(email)}`;
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Basic ${auth}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(attributes),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`CIO ${res.status} ${email}: ${body.slice(0, 300)}`);
+  }
 }
 
 function logLine(...args) {
@@ -946,6 +1005,9 @@ async function main() {
   );
   logLine(`Features slug: ${ATTIO_FLAGS_SLUG}`);
   logLine(`Config slug:   ${ATTIO_CONFIG_SLUG}`);
+  logLine(
+    `CIO:           ${SYNC_CIO ? CIO_TRACK_BASE : "off"} (flag fields only)`,
+  );
 
   if (!DRY_RUN) {
     await bootstrapAttioOptions();
