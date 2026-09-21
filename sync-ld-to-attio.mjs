@@ -372,7 +372,7 @@ async function getUserCache(neededEmails) {
   return buildUserCache(neededEmails);
 }
 
-const apiStats = { ld: 0, attio: 0 };
+const apiStats = { ld: 0, attio: 0, cio: 0 };
 
 function shortUrl(url) {
   try {
@@ -387,7 +387,7 @@ function shortUrl(url) {
 function logApi(service, method, url, extra = "") {
   apiStats[service] = (apiStats[service] || 0) + 1;
   if (!VERBOSE_API) return;
-  const n = apiStats.ld + apiStats.attio;
+  const n = apiStats.ld + apiStats.attio + apiStats.cio;
   console.log(
     `  [API #${n} ${service.toUpperCase()}] ${method} ${shortUrl(url)}${extra ? ` ${extra}` : ""}`,
   );
@@ -395,7 +395,7 @@ function logApi(service, method, url, extra = "") {
 
 function printApiStats(label = "") {
   console.log(
-    `  API totals${label ? ` ${label}` : ""}: LD=${apiStats.ld} Attio=${apiStats.attio} sum=${apiStats.ld + apiStats.attio}`,
+    `  API totals${label ? ` ${label}` : ""}: LD=${apiStats.ld} Attio=${apiStats.attio} CIO=${apiStats.cio} sum=${apiStats.ld + apiStats.attio + apiStats.cio}`,
   );
 }
 
@@ -948,6 +948,7 @@ async function identifyCioFlags(email, featureFlags, configFlags, updatedOn) {
   };
   const auth = Buffer.from(`${CIO_SITE_ID}:${CIO_API_KEY}`).toString("base64");
   const url = `${CIO_TRACK_BASE}/api/v1/customers/${encodeURIComponent(email)}`;
+  logApi("cio", "PUT", url);
   const res = await fetch(url, {
     method: "PUT",
     headers: {
