@@ -13,3 +13,7 @@ export.log
 # local CIO auth helper
 .cio-auth-header.txt
 .cio-auth-b64.txt
+
+# Local-only scripts (not needed by sync-ld-attio.yml)
+sync-attio-to-cio.mjs
+sync-ld-companies-to-attio.mjs
