@@ -1,8 +1,8 @@
 /**
  * Shared LD → Attio flag lists & extraction.
  *
- * Client org→domain map lives in gitignored `org-domains.json`
- * (see `org-domains.example.json`). Do not hardcode customer names here.
+ * Client org→domain map lives in gitignored `org-domains.json`.
+ * Do not hardcode customer names here.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -14,7 +14,7 @@ function loadOrgNameToDomain() {
   const file = path.join(__dirname, "org-domains.json");
   if (!fs.existsSync(file)) {
     console.warn(
-      "org-domains.json missing — copy org-domains.example.json (gitignored; not for public repos)",
+      "org-domains.json missing — create it locally (gitignored; not for public repos)",
     );
     return {};
   }
