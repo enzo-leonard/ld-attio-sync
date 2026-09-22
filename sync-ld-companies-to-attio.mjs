@@ -1,18 +1,21 @@
 #!/usr/bin/env node
 /**
- * Sync LaunchDarkly organization flags → Attio companies (multi-select).
+ * Sync LaunchDarkly organization flags → Attio companies.
  *
- * Prerequisites in Attio (Companies object):
- *   - Multi-select "LD flags"        → slug ld_flags
- *   - Multi-select "LD config flags" → slug ld_config_flags
- *
- * Matching: Attio companies use unique `domains`.
- *   We map LD org name → domain (see ORG_NAME_TO_DOMAIN in ld-flags-shared.mjs).
+ * Attio (companies): ld_flags, ld_config_flags, ld_last_updated
+ * Matching: unique `domains` — map LD org name → domain via org-domains.json
+ * (copy from org-domains.example.json).
  *
  * Usage:
  *   LIMIT=5 DRY_RUN=1 node sync-ld-companies-to-attio.mjs
- *   LIMIT=5 node sync-ld-companies-to-attio.mjs
  *   node sync-ld-companies-to-attio.mjs
+ *
+ * Env:
+ *   LAUNCHDARKLY_API_KEY (or LAUCH_DARK_API)
+ *   ATTIO_API_TOKEN
+ *   ATTIO_LD_FLAGS_SLUG / ATTIO_LD_CONFIG_FLAGS_SLUG / ATTIO_LD_LAST_UPDATED_SLUG
+ *   LD_PROJECT_KEY / LD_ENVIRONMENT_KEY
+ *   LIMIT, DRY_RUN, DELAY_MS, MAX_RETRIES
  */
 
 import fs from "node:fs";
@@ -54,7 +57,7 @@ const DRY_RUN = process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true";
 const DELAY_MS = Number(process.env.DELAY_MS || 300);
 
 if (!LD_TOKEN) {
-  console.error("Missing LAUCH_DARK_API / LAUNCHDARKLY_API_KEY");
+  console.error("Missing LAUNCHDARKLY_API_KEY / LAUCH_DARK_API");
   process.exit(1);
 }
 if (!DRY_RUN && !ATTIO_TOKEN) {
@@ -222,25 +225,30 @@ async function createMissingOptions(attributeSlug, titles) {
 
   console.log(`  companies/${attributeSlug}: creating ${missing.length} options...`);
   for (const title of missing) {
-    const res = await fetch(
-      `https://api.attio.com/v2/objects/companies/attributes/${attributeSlug}/options`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${ATTIO_TOKEN}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
+    let attempts = 0;
+    while (attempts < 5) {
+      attempts += 1;
+      const res = await fetch(
+        `https://api.attio.com/v2/objects/companies/attributes/${attributeSlug}/options`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${ATTIO_TOKEN}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({ data: { title } }),
         },
-        body: JSON.stringify({ data: { title } }),
-      },
-    );
-    if (res.ok || res.status === 400) {
-      existing.add(title);
-      if (!res.ok) await res.text();
-    } else if (res.status === 429) {
-      await sleep(3000);
-      continue; // will retry next loop iteration conceptually — recreate
-    } else {
+      );
+      if (res.ok || res.status === 400) {
+        existing.add(title);
+        if (!res.ok) await res.text();
+        break;
+      }
+      if (res.status === 429) {
+        await sleep(Number(res.headers.get("retry-after") || 3) * 1000);
+        continue;
+      }
       throw new Error(
         `Option "${title}" on ${attributeSlug}: ${res.status} ${(await res.text()).slice(0, 200)}`,
       );
@@ -257,7 +265,7 @@ async function bootstrapOptions() {
 }
 
 function todayUtcDate() {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD for Attio date attrs
+  return new Date().toISOString().slice(0, 10);
 }
 
 async function upsertCompany(org, featureFlags, configFlags) {
@@ -300,7 +308,7 @@ async function main() {
       const { featureFlags, configFlags } = extractFlags(items);
 
       if (samples.length < 5) {
-        samples.push({ org, featureFlags, configFlags });
+        samples.push({ featureFlags, configFlags });
       }
 
       if (!DRY_RUN) {

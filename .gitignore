@@ -10,9 +10,9 @@ org-domains.json
 *.log
 export.log
 
-# local CIO auth helper
+# Local CIO auth helpers
 .cio-auth-header.txt
 .cio-auth-b64.txt
 
-# Local-only scripts (not needed by sync-ld-attio.yml)
+# Local-only (not shipped)
 sync-attio-to-cio.mjs

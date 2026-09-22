@@ -8,7 +8,7 @@ on:
         required: false
         default: ""
       dry_run:
-        description: "Dry run (1 = no Attio writes)"
+        description: "Dry run (1 = no Attio/CIO writes)"
         required: false
         default: "0"
       shard_index:
@@ -20,11 +20,9 @@ on:
         required: false
         default: "2"
   schedule:
-    # Weekly Fridays — shard 0 at 01:00 Europe/Paris
-    # CEST (UTC+2): Friday 01:00 Paris = Thursday 23:00 UTC
+    # Weekly Friday shard 0 at 01:00 Europe/Paris (CEST = Thu 23:00 UTC)
     - cron: "0 23 * * 4"
-    # Weekly Fridays — shard 1 at 07:00 Europe/Paris (6h later)
-    # CEST (UTC+2): Friday 07:00 Paris = Friday 05:00 UTC
+    # Weekly Friday shard 1 at 07:00 Europe/Paris (CEST = Fri 05:00 UTC)
     - cron: "0 5 * * 5"
 
 jobs:
@@ -54,7 +52,7 @@ jobs:
 
       - name: Run sync
         env:
-          # Prefer LAUNCHDARKLY_API_KEY; fall back to LAUCH_DARK_API (typo kept from local .env)
+          # Prefer LAUNCHDARKLY_API_KEY; LAUCH_DARK_API kept as alias
           LAUNCHDARKLY_API_KEY: ${{ secrets.LAUNCHDARKLY_API_KEY || secrets.LAUCH_DARK_API }}
           LAUCH_DARK_API: ${{ secrets.LAUCH_DARK_API || secrets.LAUNCHDARKLY_API_KEY }}
           ATTIO_API_TOKEN: ${{ secrets.ATTIO_API_TOKEN }}

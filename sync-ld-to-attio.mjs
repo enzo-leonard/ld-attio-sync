@@ -1,34 +1,35 @@
 #!/usr/bin/env node
 /**
- * Sync LaunchDarkly flags → Attio people, then the same flag fields → Customer.io.
- *   - ld_flags         : boolean features ON
- *   - ld_config_flags  : config values as "key=value"
- * CIO gets the same flags split like sync-attio-to-cio.mjs:
- *   ld_flags_calls, ld_flags_ai, ld_flags_product, ld_config_flags, ld_last_updated
- * Other CIO attributes are left untouched (identify merges).
+ * Sync LaunchDarkly flags → Attio people, then flag fields → Customer.io.
+ *
+ * Attio (people):
+ *   - ld_flags, ld_config_flags, ld_last_updated
+ * Customer.io (identify merge — other attributes untouched):
+ *   - ld_flags_calls, ld_flags_ai, ld_flags_product, ld_config_flags, ld_last_updated
  *
  * Usage:
  *   LIMIT=100 DRY_RUN=1 node sync-ld-to-attio.mjs
- *   LIMIT=1 node sync-ld-to-attio.mjs
  *   node sync-ld-to-attio.mjs
  *
  * Env:
- *   LAUCH_DARK_API / LAUNCHDARKLY_API_KEY
+ *   LAUNCHDARKLY_API_KEY (or LAUCH_DARK_API)
  *   ATTIO_API_TOKEN
  *   CUSTOMERIO_SITE_ID / CUSTOMERIO_API_KEY / CUSTOMERIO_REGION (us|eu)
  *   SYNC_CIO=0 to skip Customer.io
- *   ATTIO_LD_FLAGS_SLUG         (default: ld_flags)
- *   ATTIO_LD_CONFIG_FLAGS_SLUG  (default: ld_config_flags)
+ *   ATTIO_LD_FLAGS_SLUG / ATTIO_LD_CONFIG_FLAGS_SLUG / ATTIO_LD_LAST_UPDATED_SLUG
  *   LIMIT, DRY_RUN, DELAY_MS, CONCURRENCY, VERBOSE_API
- *   SHARD_INDEX / SHARD_COUNT (e.g. 0/2 and 1/2 — no overlap)
- *   CACHE_TTL_HOURS (default 24), REFRESH_CACHE=1 to force re-list
- *   LD_RATE_CUSHION (default 0) — hard-wait only when remaining ≤ cushion
+ *   SHARD_INDEX / SHARD_COUNT, CACHE_TTL_HOURS, REFRESH_CACHE=1
+ *   EMAIL_TIMEOUT_MS, FETCH_TIMEOUT_MS, MAX_RETRIES, LD_RATE_CUSHION
  */
 
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { splitFlagsByCategory } from "./ld-flags-shared.mjs";
+import {
+  FLAG_KEYS,
+  extractFlags,
+  splitFlagsByCategory,
+} from "./ld-flags-shared.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -120,126 +121,18 @@ function withLdGate(fn) {
 }
 
 if (!LD_TOKEN) {
-  console.error("Missing LAUCH_DARK_API / LAUNCHDARKLY_API_KEY");
+  console.error("Missing LAUNCHDARKLY_API_KEY / LAUCH_DARK_API");
   process.exit(1);
 }
 if (!DRY_RUN && !ATTIO_TOKEN) {
   console.error("Missing ATTIO_API_TOKEN (or set DRY_RUN=1)");
   process.exit(1);
 }
-
-/** Feature / boolean-ish keys (+ wildcard *-notification-announcement). */
-const FLAG_KEYS = new Set([
-  "enable-recording-bot",
-  "enable-in-browser-recording",
-  "enable-use-display-media",
-  "enable-calendar-integration",
-  "enable-auto-record-calendar-events",
-  "show-new-scheduled-calls",
-  "custom-bot-name",
-  "browser-recording-start-confirmation",
-  "live_transcription",
-  "live-transcription-recall",
-  "in-call-live-summary",
-  "post-call-streaming-summary",
-  "live-call-classification",
-  "enable-agentic-jgpt-v3",
-  "juni-global-chatbot",
-  "enable-personal-jgpt-chat",
-  "enable-document-sources-jgpt",
-  "enable-inline-citations",
-  "enable-quote-tool",
-  "enable-dynamic-juni-suggestions",
-  "enable-nl-interview-filters",
-  "enable-mcp",
-  "ivg-generation",
-  "ivg-search-library",
-  "enable-interview-guide-markdown-editor",
-  "agentic-loop-chat-v2",
-  "enable-interview-guide-auto-checkoff",
-  "enable-tracker",
-  "enable-kta-chat",
-  "enable-kta-agentic-chat",
-  "enable-kta-generation-v2",
-  "enable-transcript-library",
-  "enable-transcript-library-filters",
-  "enable-transcript-library-market-reports",
-  "enable-report-generator",
-  "thematic_transcripts",
-  "enable-slide-deck",
-  "enable-slide-builder",
-  "enable-ppt-audit",
-  "enable-ppt-audit-style-guide",
-  "enable-thinkcell-service",
-  "running-summaries",
-  "enable-running-summary-templates",
-  "enable-running-summary-citation",
-  "summary-by-date-range",
-  "enable-entity-benchmarking",
-  "render-similar-entities",
-  "competitive-analysis-generation",
-  "enable-survey-module",
-  "enable-survey-builder-uxr",
-  "enable-survey-painted-door",
-  "voice-agents-mode",
-  "junior-interviewer-v1-client-test",
-  "enable-desktop-app-download",
-  "mobile-app-banner",
-  "mobile-app-notification-announcement",
-  "mobile-standalone-calls",
-  "mobile-share-recording",
-  "desktop-app-jgpt",
-  "desktop-app-ivg-juni-chatbot",
-  "desktop-app-trim-calls",
-  "enable-home-v2",
-  "new-project-onboarding",
-  "learn-junior",
-  "force-learn-junior",
-  "welcome-modal",
-  "book-a-demo-links",
-  "show-feature-announcements",
-  "feature-flags-opt-in",
-  "enable-junior-wrapped",
-  "cmd-k-menu-v2",
-  "enable-bookmarks-folders-v2",
-  "highlight-v2",
-  "highlighting-quotes",
-  "enable-calls-v2",
-  "enable-all-calls",
-  "enabled-standalone-calls",
-  "enable-call-price-tracker",
-  "show-project-costs",
-  "enable-import-calls-from-advisors-button",
-  "enable-take-notes",
-  "enable-sentiment-analysis",
-  "enable-duplicate-interview",
-  "enable-foreign-transcript",
-  "enable-original-language-transcript",
-  "project_sharing",
-  "project_share_linking",
-  "enable-org-wide-project-visibility",
-  "share-auto-provision-domains",
-  "enable-bulk-upload-modal",
-  "enable-enhanced-docx-parsing",
-  "enable_anonymization_settings",
-  "transcript_anonymization",
-  "recording-confirmation-config",
-  "enable-restricted-meeting-guardrail",
-]);
-
-/** Keys that are typically config (string/number), not pure booleans. */
-const CONFIG_FLAG_KEYS = new Set([
-  "custom-bot-name",
-  "browser-recording-start-confirmation",
-  "book-a-demo-links",
-  "voice-agents-mode",
-  "recording-confirmation-config",
-  "share-auto-provision-domains",
-  "feature-flags-opt-in",
-]);
-
-function isWantedFlag(key) {
-  return FLAG_KEYS.has(key) || key.endsWith("-notification-announcement");
+if (!DRY_RUN && SYNC_CIO && (!CIO_SITE_ID || !CIO_API_KEY)) {
+  console.error(
+    "Customer.io sync is enabled but CUSTOMERIO_SITE_ID / CUSTOMERIO_API_KEY is missing (or set SYNC_CIO=0)",
+  );
+  process.exit(1);
 }
 
 function sleep(ms) {
@@ -782,55 +675,6 @@ async function evaluateFlags(email, userInfo) {
   return data.items || [];
 }
 
-/**
- * Split LD evaluate results into:
- *  - featureFlags: boolean true (+ opt-in subs)
- *  - configFlags:  "key=value" for configs / strings
- */
-function extractFlags(items) {
-  const featureFlags = [];
-  const configFlags = [];
-
-  for (const item of items) {
-    const key = item.key;
-    if (!isWantedFlag(key)) continue;
-    const v = item._value;
-
-    if (v === true) {
-      featureFlags.push(key);
-      continue;
-    }
-    if (v === false || v === null || v === undefined || v === "") continue;
-
-    if (Array.isArray(v)) {
-      if (key === "feature-flags-opt-in") {
-        const subs = v
-          .map((sub) => (typeof sub === "object" && sub ? sub.key : sub))
-          .filter(Boolean);
-        if (subs.length) {
-          featureFlags.push(key, ...subs);
-          // also store full payload summary as config
-          configFlags.push(`${key}=${subs.join("+")}`);
-        }
-      }
-      continue;
-    }
-
-    if (typeof v === "string" || typeof v === "number") {
-      const truncated =
-        typeof v === "string" && v.length > 80
-          ? `${v.slice(0, 77)}...`
-          : String(v);
-      configFlags.push(`${key}=${truncated}`);
-    }
-  }
-
-  return {
-    featureFlags: [...new Set(featureFlags)].sort(),
-    configFlags: [...new Set(configFlags)].sort(),
-  };
-}
-
 /** In-memory cache of options already known to exist in Attio (per attribute slug). */
 const optionsCache = new Map(); // slug → Set<title>
 
@@ -880,16 +724,13 @@ async function createMissingOptions(attributeSlug, titles) {
 }
 
 /**
- * Upfront: list existing options, create all known FLAG_KEYS for ld_flags.
- * Config options (key=value) are created later when we discover values.
- * Note: Attio has NO batch create endpoint — 1 POST per missing option.
+ * Upfront: ensure all known FLAG_KEYS exist as Attio select options.
+ * Config options (key=value) are created on demand when values are discovered.
  */
 async function bootstrapAttioOptions() {
   console.log("Bootstrapping Attio select options...");
   await listExistingOptions(ATTIO_FLAGS_SLUG);
   await listExistingOptions(ATTIO_CONFIG_SLUG);
-
-  // All known feature flag keys as options on ld_flags
   await createMissingOptions(ATTIO_FLAGS_SLUG, [...FLAG_KEYS]);
 }
 
@@ -932,7 +773,7 @@ function cioFlagArray(name, titles) {
   return arr;
 }
 
-/** Same split as sync-attio-to-cio.mjs. Identify merges, so only flag fields change. */
+/** Identify merges — only flag fields are written; other CIO attributes stay untouched. */
 async function identifyCioFlags(email, featureFlags, configFlags, updatedOn) {
   if (!CIO_SITE_ID || !CIO_API_KEY) {
     throw new Error("SYNC_CIO is on but CUSTOMERIO_SITE_ID / CUSTOMERIO_API_KEY is missing");
@@ -1050,7 +891,6 @@ async function main() {
 
           if (samples.length < 5) {
             samples.push({
-              email,
               featureFlags,
               configFlags,
               mode: userCache.has(email) ? "multi" : "email",

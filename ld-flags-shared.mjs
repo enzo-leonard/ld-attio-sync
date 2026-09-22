@@ -1,8 +1,8 @@
 /**
- * Shared LD → Attio flag lists & extraction.
+ * Shared LD → Attio flag lists & extraction helpers.
  *
- * Client org→domain map lives in gitignored `org-domains.json`.
- * Do not hardcode customer names here.
+ * Map LD org names → Attio company domains in gitignored `org-domains.json`
+ * (see `org-domains.example.json`).
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -14,7 +14,7 @@ function loadOrgNameToDomain() {
   const file = path.join(__dirname, "org-domains.json");
   if (!fs.existsSync(file)) {
     console.warn(
-      "org-domains.json missing — create it locally (gitignored; not for public repos)",
+      "org-domains.json missing — company domain matching will use name-derived fallbacks (copy org-domains.example.json)",
     );
     return {};
   }
@@ -124,21 +124,9 @@ export const FLAG_KEYS = new Set([
   "enable-restricted-meeting-guardrail",
 ]);
 
-export const CONFIG_FLAG_KEYS = new Set([
-  "custom-bot-name",
-  "browser-recording-start-confirmation",
-  "book-a-demo-links",
-  "voice-agents-mode",
-  "recording-confirmation-config",
-  "share-auto-provision-domains",
-  "feature-flags-opt-in",
-]);
-
 /**
- * 3 CIO-friendly buckets (each full CSV stays under Customer.io's 1000B limit).
- *   ld_flags_calls   — recording / calendar / live call
- *   ld_flags_ai      — Juni / JGPT / KTA / IVG / summaries
- *   ld_flags_product — library / slides / surveys / UX / sharing
+ * Customer.io buckets (each JSON array stays under the ~1000B attribute limit):
+ *   ld_flags_calls | ld_flags_ai | ld_flags_product
  */
 export const FLAG_CATEGORIES = {
   calls: new Set([
@@ -199,7 +187,6 @@ export const FLAG_CATEGORIES = {
     "desktop-app-ivg-juni-chatbot",
     "junior-interviewer-v1-client-test",
     "voice-agents-mode",
-    // moved from product to keep JSON array ≤ 1000B
     "enable-transcript-library-market-reports",
     "mobile-app-notification-announcement",
   ]),
@@ -250,7 +237,6 @@ export function categoryForFlag(key) {
   if (FLAG_CATEGORIES.calls.has(key)) return "calls";
   if (FLAG_CATEGORIES.ai.has(key)) return "ai";
   if (FLAG_CATEGORIES.product.has(key)) return "product";
-  // *-notification-announcement and anything unknown → product
   return "product";
 }
 
@@ -264,8 +250,12 @@ export function splitFlagsByCategory(flagTitles) {
   return out;
 }
 
-/** LD org name → Attio company domain (loaded from gitignored org-domains.json). */
-export const ORG_NAME_TO_DOMAIN = loadOrgNameToDomain();
+/** Lazy-loaded so people sync does not warn about org-domains.json. */
+let _orgNameToDomain = null;
+function orgNameToDomainMap() {
+  if (_orgNameToDomain === null) _orgNameToDomain = loadOrgNameToDomain();
+  return _orgNameToDomain;
+}
 
 export function isWantedFlag(key) {
   return FLAG_KEYS.has(key) || key.endsWith("-notification-announcement");
@@ -313,8 +303,8 @@ export function extractFlags(items) {
 }
 
 export function domainForOrg(name, key) {
-  if (name && ORG_NAME_TO_DOMAIN[name]) return ORG_NAME_TO_DOMAIN[name];
-  // fallback: slug from name
+  const map = orgNameToDomainMap();
+  if (name && map[name]) return map[name];
   if (name) {
     return (
       name
@@ -323,6 +313,5 @@ export function domainForOrg(name, key) {
         .slice(0, 40) + ".com"
     );
   }
-  // last resort: synthetic domain from UUID (unique for matching)
   return `ld-org-${key.slice(0, 8)}.local`;
 }
