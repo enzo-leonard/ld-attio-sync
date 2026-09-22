@@ -16,4 +16,3 @@ export.log
 
 # Local-only scripts (not needed by sync-ld-attio.yml)
 sync-attio-to-cio.mjs
-sync-ld-companies-to-attio.mjs
