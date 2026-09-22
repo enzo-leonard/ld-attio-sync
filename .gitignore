@@ -12,3 +12,4 @@ export.log
 
 # local CIO auth helper
 .cio-auth-header.txt
+.cio-auth-b64.txt
