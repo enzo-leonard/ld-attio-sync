@@ -7,6 +7,9 @@ on:
         description: "Max emails to scan (empty = all)"
         required: false
         default: ""
+  schedule:
+    # Daily at 06:00 Europe/Paris (CEST = 04:00 UTC, CET = 05:00 Paris)
+    - cron: "0 4 * * *"
 
 jobs:
   read:
