@@ -8,10 +8,10 @@ on:
         required: false
         default: ""
   schedule:
-    # Every 4 hours, Monday–Friday only.
-    # UTC 00:00, 04:00, 08:00, 12:00, 16:00, 20:00
-    # Europe/Paris in summer (CEST): 02:00, 06:00, 10:00, 14:00, 18:00, 22:00
-    - cron: "0 */4 * * 1-5"
+    # Weekdays, London daytime. GitHub cron is UTC.
+    # Summer (BST, UTC+1): 08:00, 10:00, 12:00, 14:00, 16:00, 18:00, 20:00 London
+    # Winter (GMT): the same UTC slots run one hour earlier in London
+    - cron: "0 7,9,11,13,15,17,19 * * 1-5"
 
 jobs:
   read:
