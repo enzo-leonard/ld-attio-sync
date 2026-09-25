@@ -236,6 +236,10 @@ async function attioFetch(url, options = {}, attempt = 1) {
       await sleep(wait);
       return attioFetch(url, options, attempt);
     }
+    if ([502, 503, 504].includes(res.status) && attempt < maxAttempts) {
+      await sleep(Math.min(1000 * 2 ** (attempt - 1), 30000));
+      return attioFetch(url, options, attempt + 1);
+    }
     if (!res.ok) {
       const body = await res.text();
       throw new Error(`Attio ${res.status}: ${body.slice(0, 300).replace(/[^\s@]+@[^\s@]+/g, "[email]")}`);
@@ -302,6 +306,7 @@ async function main() {
 
   const people = [...state.people.entries()].filter(([email]) => email.includes("@"));
   let updated = 0;
+  let failed = 0;
   if (!DRY_RUN) {
     let cursor = 0;
     async function worker() {
@@ -309,9 +314,13 @@ async function main() {
         const index = cursor;
         cursor += 1;
         const [email, row] = people[index];
-        await paceWrite();
-        await upsertPerson(email, row);
-        updated += 1;
+        try {
+          await paceWrite();
+          await upsertPerson(email, row);
+          updated += 1;
+        } catch {
+          failed += 1;
+        }
       }
     }
     const workers = Math.min(CONCURRENCY, people.length);
@@ -320,6 +329,13 @@ async function main() {
 
   console.log(`people found: ${people.length}`);
   console.log(`people updated: ${updated}`);
+  console.log(`people failed: ${failed}`);
+  if (failed > 0) {
+    console.log(
+      `::warning::Attio sync incomplete: ${updated} updated, ${failed} failed out of ${people.length}`,
+    );
+  }
+  if (!DRY_RUN && people.length > 0 && updated === 0) process.exitCode = 1;
 }
 
 main().catch((err) => {
