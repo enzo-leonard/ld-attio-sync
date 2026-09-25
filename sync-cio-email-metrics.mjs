@@ -1,20 +1,24 @@
 #!/usr/bin/env node
 /**
- * Read-only Customer.io email metrics.
- * Counts sent, opened, clicked, unsubscribed, and non-delivery
- * across every sent email, and groups bounce/failure responses.
- * Does not write to Customer.io, Attio, or anywhere else.
+ * Customer.io email metrics → Attio people, matched by email.
+ * Writes cio_sent, cio_opens, cio_clicked, cio_unsubscribe,
+ * cio_last_engaged_date, cio_suppression_status.
+ * Does not write back to Customer.io.
  *
  * Usage:
- *   LIMIT=200 node sync-cio-email-metrics.mjs
+ *   LIMIT=20 DRY_RUN=1 node sync-cio-email-metrics.mjs
  *   node sync-cio-email-metrics.mjs
  *
  * Env:
  *   CUSTOMERIO_APP_API_KEY   App API key (Bearer). Tracking API key will not work.
  *   CUSTOMERIO_REGION        us (default) | eu
+ *   ATTIO_API_TOKEN
  *   LIMIT                    Max deliveries to scan (empty = all)
  *   LOOKBACK_MONTHS          How far back to walk (default 120). Stops after
  *                            two empty 6-month windows.
+ *   DRY_RUN
+ *   ATTIO_WRITE_RPS          Attio write cap (default 25/s)
+ *   CONCURRENCY              In-flight Attio writes (default 10)
  */
 
 import fs from "node:fs";
@@ -37,6 +41,10 @@ function loadEnv() {
 loadEnv();
 
 const APP_KEY = process.env.CUSTOMERIO_APP_API_KEY || "";
+const ATTIO_TOKEN = process.env.ATTIO_API_TOKEN || "";
+const DRY_RUN = process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true";
+const ATTIO_WRITE_RPS = Math.max(1, Number(process.env.ATTIO_WRITE_RPS || 25));
+const CONCURRENCY = Math.max(1, Number(process.env.CONCURRENCY || 10));
 const REGION = (process.env.CUSTOMERIO_REGION || "us").toLowerCase();
 const BASE =
   REGION === "eu" ? "https://api-eu.customer.io" : "https://api.customer.io";
@@ -52,6 +60,10 @@ if (!APP_KEY) {
   console.error(
     "Missing CUSTOMERIO_APP_API_KEY. The Tracking API key (CUSTOMERIO_API_KEY) cannot read metrics. Create an App API key in Customer.io → Settings → API Credentials.",
   );
+  process.exit(1);
+}
+if (!DRY_RUN && !ATTIO_TOKEN) {
+  console.error("Missing ATTIO_API_TOKEN (or set DRY_RUN=1)");
   process.exit(1);
 }
 
@@ -98,8 +110,28 @@ function emptyRow() {
     failed: 0,
     undeliverable: 0,
     dropped: 0,
+    lastEngaged: 0,
     reasons: {},
   };
+}
+
+function noteEngaged(row, metrics) {
+  for (const key of ["opened", "clicked"]) {
+    const ts = Number(metrics[key]);
+    if (Number.isFinite(ts) && ts > row.lastEngaged) row.lastEngaged = ts;
+  }
+}
+
+function suppressionStatus(row) {
+  const reason = Object.entries(row.reasons).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+  let status = "";
+  if (row.unsubscribed) status = "unsubscribed";
+  else if (row.bounced) status = "bounced";
+  else if (row.undeliverable) status = "undeliverable";
+  else if (row.failed) status = "failed";
+  else if (row.dropped) status = "dropped";
+  if (status && reason) status = `${status}: ${reason}`;
+  return status.replace(/\s+/g, " ").slice(0, 500);
 }
 
 async function scanWindow(startTs, endTs, state) {
@@ -132,6 +164,7 @@ async function scanWindow(startTs, endTs, state) {
           row[key] += 1;
         }
       }
+      noteEngaged(row, metrics);
       let undelivered = false;
       for (const key of NON_DELIVERY) {
         if (metrics[key] != null) {
@@ -155,6 +188,97 @@ async function scanWindow(startTs, endTs, state) {
   return seen;
 }
 
+function isTransientNetworkError(err) {
+  const code = err?.cause?.code || err?.code || "";
+  const msg = String(err?.message || err || "");
+  return (
+    ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "ENOTFOUND", "EPIPE", "EAI_AGAIN"].includes(code) ||
+    msg.includes("fetch failed")
+  );
+}
+
+let nextWriteAt = 0;
+let rateLimitedUntil = 0;
+let paceChain = Promise.resolve();
+
+function paceWrite() {
+  const interval = 1000 / ATTIO_WRITE_RPS;
+  const run = paceChain.then(async () => {
+    const blocked = rateLimitedUntil - Date.now();
+    if (blocked > 0) await sleep(blocked);
+    const now = Date.now();
+    const slot = Math.max(now, nextWriteAt);
+    nextWriteAt = slot + interval;
+    const wait = slot - now;
+    if (wait > 0) await sleep(wait);
+  });
+  paceChain = run.catch(() => {});
+  return run;
+}
+
+async function attioFetch(url, options = {}, attempt = 1) {
+  const maxAttempts = Number(process.env.MAX_RETRIES || 8);
+  const timeoutMs = Number(process.env.FETCH_TIMEOUT_MS || 60000);
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        Authorization: `Bearer ${ATTIO_TOKEN}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        ...(options.headers || {}),
+      },
+    });
+    if (res.status === 429) {
+      const wait = Number(res.headers.get("retry-after") || 1) * 1000;
+      rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + wait);
+      await sleep(wait);
+      return attioFetch(url, options, attempt);
+    }
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Attio ${res.status}: ${body.slice(0, 300).replace(/[^\s@]+@[^\s@]+/g, "[email]")}`);
+    }
+    return res.json();
+  } catch (err) {
+    const timedOut =
+      err?.name === "TimeoutError" ||
+      err?.name === "AbortError" ||
+      String(err?.message || "").includes("TimeoutError");
+    if (attempt < maxAttempts && (timedOut || isTransientNetworkError(err))) {
+      await sleep(Math.min(1000 * 2 ** (attempt - 1), 30000));
+      return attioFetch(url, options, attempt + 1);
+    }
+    throw err;
+  }
+}
+
+function attioValues(email, row) {
+  const values = {
+    email_addresses: [{ email_address: email }],
+    cio_sent: row.sent,
+    cio_opens: row.opened,
+    cio_clicked: row.clicked,
+    cio_unsubscribe: row.unsubscribed > 0,
+    cio_suppression_status: suppressionStatus(row),
+  };
+  if (row.lastEngaged) {
+    values.cio_last_engaged_date = new Date(row.lastEngaged * 1000).toISOString().slice(0, 10);
+  }
+  return values;
+}
+
+async function upsertPerson(email, row) {
+  await attioFetch(
+    "https://api.attio.com/v2/objects/people/records?matching_attribute=email_addresses",
+    {
+      method: "PUT",
+      body: JSON.stringify({ data: { values: attioValues(email, row) } }),
+    },
+  );
+}
+
 async function main() {
   const now = Math.floor(Date.now() / 1000);
   const floor = now - LOOKBACK_MONTHS * 30 * 24 * 60 * 60;
@@ -166,52 +290,36 @@ async function main() {
   };
 
   let end = now;
-  let coveredStart = now;
   let emptyStreak = 0;
-  console.error(
-    `Lecture Customer.io (${REGION}) — emails envoyés, sans écriture` +
-      (LIMIT != null ? `, limite ${LIMIT}` : ""),
-  );
-
   while (end > floor) {
     if (LIMIT != null && state.scanned >= LIMIT) break;
     const start = Math.max(floor, end - WINDOW_SEC);
     const n = await scanWindow(start, end, state);
-    coveredStart = start;
-    const from = new Date(start * 1000).toISOString().slice(0, 10);
-    const to = new Date(end * 1000).toISOString().slice(0, 10);
-    console.error(`  ${from} → ${to}: ${n} emails`);
     emptyStreak = n === 0 ? emptyStreak + 1 : 0;
     if (emptyStreak >= 2) break;
     end = start;
   }
 
-  const rows = [...state.people.entries()].sort((a, b) => b[1].sent - a[1].sent);
-  console.error("");
-  console.error(
-    `Fenêtre: ${new Date(coveredStart * 1000).toISOString().slice(0, 10)} → ${new Date(now * 1000).toISOString().slice(0, 10)} — ${rows.length} people, ${state.scanned} envois`,
-  );
-  const header = ["email", "sent", "open", "click", "unsub", "bounce", "failed", "undeliv", "dropped", "non_delivery"];
-  const csv = (values) =>
-    values.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",");
-  console.log(csv(header));
-  for (const [email, row] of rows) {
-    const topReason = Object.entries(row.reasons).sort((a, b) => b[1] - a[1])[0];
-    console.log(
-      csv([
-        email,
-        row.sent,
-        row.opened,
-        row.clicked,
-        row.unsubscribed,
-        row.bounced,
-        row.failed,
-        row.undeliverable,
-        row.dropped,
-        topReason ? topReason[0].replace(/\s+/g, " ") : "",
-      ]),
-    );
+  const people = [...state.people.entries()].filter(([email]) => email.includes("@"));
+  let updated = 0;
+  if (!DRY_RUN) {
+    let cursor = 0;
+    async function worker() {
+      while (cursor < people.length) {
+        const index = cursor;
+        cursor += 1;
+        const [email, row] = people[index];
+        await paceWrite();
+        await upsertPerson(email, row);
+        updated += 1;
+      }
+    }
+    const workers = Math.min(CONCURRENCY, people.length);
+    await Promise.all(Array.from({ length: workers }, () => worker()));
   }
+
+  console.log(`people found: ${people.length}`);
+  console.log(`people updated: ${updated}`);
 }
 
 main().catch((err) => {
