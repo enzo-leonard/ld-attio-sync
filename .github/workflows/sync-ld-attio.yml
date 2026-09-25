@@ -59,7 +59,7 @@ jobs:
           ATTIO_LD_FLAGS_SLUG: ld_flags
           CUSTOMERIO_SITE_ID: ${{ secrets.CUSTOMERIO_SITE_ID }}
           CUSTOMERIO_API_KEY: ${{ secrets.CUSTOMERIO_API_KEY }}
-          CUSTOMERIO_REGION: us
+          CUSTOMERIO_REGION: eu
           LIMIT: ${{ github.event.inputs.limit }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           DELAY_MS: "350"
