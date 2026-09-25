@@ -1,0 +1,28 @@
+name: Read CIO email metrics
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Max emails to scan (empty = all)"
+        required: false
+        default: ""
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Read email metrics
+        env:
+          CUSTOMERIO_APP_API_KEY: ${{ secrets.CUSTOMERIO_APP_API_KEY }}
+          CUSTOMERIO_REGION: eu
+          LIMIT: ${{ github.event.inputs.limit }}
+          NODE_OPTIONS: "--no-warnings"
+        run: node sync-cio-email-metrics.mjs

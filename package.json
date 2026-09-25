@@ -8,6 +8,8 @@
     "sync:100": "LIMIT=100 DRY_RUN=0 node sync-ld-to-attio.mjs",
     "sync:dry": "LIMIT=100 DRY_RUN=1 node sync-ld-to-attio.mjs",
     "sync:companies": "node sync-ld-companies-to-attio.mjs",
-    "sync:companies:dry": "LIMIT=5 DRY_RUN=1 node sync-ld-companies-to-attio.mjs"
+    "sync:companies:dry": "LIMIT=5 DRY_RUN=1 node sync-ld-companies-to-attio.mjs",
+    "cio:metrics": "node sync-cio-email-metrics.mjs",
+    "cio:metrics:test": "LIMIT=200 node sync-cio-email-metrics.mjs"
   }
 }
