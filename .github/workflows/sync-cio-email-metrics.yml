@@ -8,8 +8,9 @@ on:
         required: false
         default: ""
   schedule:
-    # Daily at 06:00 Europe/Paris (CEST = 04:00 UTC, CET = 05:00 Paris)
-    - cron: "0 4 * * *"
+    # Every 4 hours. UTC 00:00, 04:00, 08:00, 12:00, 16:00, 20:00
+    # Europe/Paris in summer (CEST): 02:00, 06:00, 10:00, 14:00, 18:00, 22:00
+    - cron: "0 */4 * * *"
 
 jobs:
   read:
